@@ -1,2 +1,2 @@
 # DbSyncer
-Utility for fault-tolerance database replication, based on raft protocol
+Utility for fault-tolerant database replication, based on raft protocol
