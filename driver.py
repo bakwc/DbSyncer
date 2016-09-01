@@ -19,4 +19,15 @@ def createDriver(config):
 		sqliteFile = config.get('sqlite', 'dbFile')
 		from sqlite_driver import SqliteDriver
 		return SqliteDriver(sqliteFile)
+	elif dbType == 'firebird':
+		firebirdFile = config.get(dbType, 'dbFile')
+		options = dict(config.items(dbType))
+		if "dbfile" in options:
+			del options["dbfile"]
+		if "database" in options:
+			if options["database"]:
+				firebirdFile = options["database"]
+			del options["database"]
+		from firebird_driver import FirebirdDriver
+		return FirebirdDriver(firebirdFile, options)
 	raise LookupError('wrong database type')
