@@ -1,6 +1,11 @@
 import msgpackrpc
 import sys
 
+try:
+	import readline
+except:
+	pass
+
 if __name__ == '__main__':
 	if len(sys.argv) != 2:
 		print 'Usage: %s rpc_server_host:port'
@@ -12,10 +17,13 @@ if __name__ == '__main__':
 	while True:
 		cmd = raw_input('>> ')
 		normCmd = cmd.lower()
-		if normCmd.startswith('insert') or \
-				normCmd.startswith('create'):
-			client.call('executeWrite', cmd)
-		elif normCmd.startswith('select'):
-			print client.call('executeRead', cmd)
-		elif cmd:
-			print 'unsupported command'
+		splitCmd = normCmd.split()
+		if not splitCmd:
+			continue
+		try:
+			if splitCmd[0] in ('select',):
+				print client.call('executeRead', cmd)
+			else:
+				client.call('executeWrite', cmd)
+		except Exception as e:
+			print e

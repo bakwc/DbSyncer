@@ -53,6 +53,9 @@ class SqliteDriver(Driver):
 			self.__conn.commit()
 
 	def executeRead(self, query):
+		cmd = str(query).lower().split()
+		if not cmd or cmd[0] not in ('select',):
+			raise Exception('readonly command not allowed')
 		with self.__lock:
 			c = self.__conn.cursor()
 			c.execute(query)

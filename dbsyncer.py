@@ -1,5 +1,7 @@
 from pysyncobj import SyncObj, SyncObjConf, replicated
+import tornado.httpserver
 import msgpackrpc
+import json
 import ConfigParser
 import sys
 import time
@@ -35,10 +37,48 @@ class DBSyncer(SyncObj, CustomActions):
 
 	@replicated
 	def executeWrite(self, queries):
-		self.__driver.executeWrite(queries)
+		try:
+			self.__driver.executeWrite(queries)
+		except:
+			pass
 
 	def executeRead(self, query):
 		return self.__driver.executeRead(query)
+
+
+class HTTPJsonRpcHandler(object):
+
+	def __init__(self, syncer):
+		self.__syncer = syncer
+
+	def onNewRequest(self, request):
+		reqID = None
+		try:
+			req = json.loads(request.body)
+			method = req[u'method']
+			params = req[u'params']
+			reqID = req[u'id']
+			if method.startswith('_'):
+				raise Exception('wrong method')
+			func = getattr(self.__syncer, method, None)
+			if func is None:
+				raise Exception('wrong method')
+			res = {
+				u'result': func(*params),
+				u'error': None,
+				u'id': reqID,
+			}
+			response = json.dumps(res)
+		except Exception as e:
+			res = {
+				u'result': None,
+				u'error': str(e),
+				u'id': reqID,
+			}
+			response = json.dumps(res)
+
+		request.write("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(response), response))
+		request.finish()
 
 
 if __name__ == '__main__':
@@ -49,14 +89,29 @@ if __name__ == '__main__':
 	config = ConfigParser.RawConfigParser()
 	config.read(sys.argv[1])
 	syncer = DBSyncer(config)
+	httpHandler = HTTPJsonRpcHandler(syncer)
+
 	while not syncer._isReady():
 		time.sleep(1.0)
 		print 'waiting for ready'
 	print 'ready'
 
-	rpcAddress = config.get('DBSyncer', 'msgPackRpcAddr')
-	rpcHost, rpcPort = rpcAddress.split(':')
-	rpcPort = int(rpcPort)
-	rpcServer = msgpackrpc.Server(syncer)
-	rpcServer.listen(msgpackrpc.Address(rpcHost, rpcPort))
-	rpcServer.start()
+
+	if config.has_option('DBSyncer', 'msgPackRpcAddr'):
+		rpcAddress = config.get('DBSyncer', 'msgPackRpcAddr')
+		rpcHost, rpcPort = rpcAddress.split(':')
+		rpcPort = int(rpcPort)
+		rpcServer = msgpackrpc.Server(syncer)
+		rpcServer.listen(msgpackrpc.Address(rpcHost, rpcPort))
+
+	loop = tornado.ioloop.IOLoop.current()
+
+	if config.has_option('DBSyncer', 'httpRpcAddr'):
+		rpcAddress = config.get('DBSyncer', 'httpRpcAddr')
+		rpcHost, rpcPort = rpcAddress.split(':')
+		rpcPort = int(rpcPort)
+
+		http_server = tornado.httpserver.HTTPServer(httpHandler.onNewRequest)
+		http_server.listen(rpcPort)
+
+	loop.start()
