@@ -60,3 +60,6 @@ class SqliteDriver(Driver):
 			c = self.__conn.cursor()
 			c.execute(query)
 			return c.fetchall()
+
+	def getType(self):
+		return 'sqlite'

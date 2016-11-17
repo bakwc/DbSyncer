@@ -13,6 +13,9 @@ class Driver(object):
 	def executeRead(self, query):
 		raise NotImplementedError()
 
+	def getType(self):
+		raise NotImplementedError()
+
 def createDriver(config):
 	dbType = config.get('DBSyncer', 'dbType')
 	if dbType == 'sqlite':
@@ -30,4 +33,8 @@ def createDriver(config):
 			del options["database"]
 		from firebird_driver import FirebirdDriver
 		return FirebirdDriver(firebirdFile, options)
+	elif dbType == 'gdbm':
+		gdbmFile = config.get('gdbm', 'dbFile')
+		from gdbm_driver import GdbmDriver
+		return GdbmDriver(gdbmFile)
 	raise LookupError('wrong database type')

@@ -1,10 +1,11 @@
-from pysyncobj import SyncObj, SyncObjConf, replicated
+from pysyncobj import SyncObj, SyncObjConf, replicated, FAIL_REASON
 import tornado.httpserver
 import msgpackrpc
 import json
 import ConfigParser
 import sys
 import time
+from functools import partial
 from driver import createDriver
 from custom_actions import CustomActions
 
@@ -39,11 +40,15 @@ class DBSyncer(SyncObj, CustomActions):
 	def executeWrite(self, queries):
 		try:
 			self.__driver.executeWrite(queries)
-		except:
-			pass
+			return (True, None)
+		except Exception as e:
+			return (False, str(e))
 
 	def executeRead(self, query):
 		return self.__driver.executeRead(query)
+
+	def getDriverType(self):
+		return self.__driver.getType()
 
 
 class HTTPJsonRpcHandler(object):
@@ -63,22 +68,84 @@ class HTTPJsonRpcHandler(object):
 			func = getattr(self.__syncer, method, None)
 			if func is None:
 				raise Exception('wrong method')
-			res = {
-				u'result': func(*params),
-				u'error': None,
-				u'id': reqID,
-			}
-			response = json.dumps(res)
+			funcReplicated = func.func_dict.get('replicated', False)
+			if funcReplicated:
+				func(*params, callback=partial(self.onResponseCompleted, request, reqID))
+				return
+			result = func(*params)
+			self.sendResponse(request, reqID, result, None)
 		except Exception as e:
-			res = {
-				u'result': None,
-				u'error': str(e),
-				u'id': reqID,
-			}
-			response = json.dumps(res)
+			self.sendResponse(request, reqID, None, str(e))
 
+	def onResponseCompleted(self, request, reqID, method, result, failReason):
+		if failReason == FAIL_REASON.SUCCESS:
+			self.sendResponse(request, reqID, result, None)
+			return
+		self.sendResponse(request, reqID, result, failReason)
+
+		if failReason != FAIL_REASON.SUCCESS:
+			self.sendResponse(request, reqID, result, str(failReason))
+			return
+
+		if method == 'executeWrite':
+			if result[0]:
+				self.sendResponse(request, reqID, None, str(result[1]))
+				return
+			else:
+				self.sendResponse(request, reqID, None, None)
+				return
+
+		self.sendResponse(request, reqID, result, None)
+
+
+
+	def sendResponse(self, request, reqID, result, error):
+		res = {
+			u'result': result,
+			u'error': error,
+			u'id': reqID,
+		}
+		response = json.dumps(res)
 		request.write("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s" % (len(response), response))
 		request.finish()
+
+
+class MsgPackRpcHanlder(object):
+
+	def __init__(self, syncer):
+		self.__syncer = syncer
+
+	def dispatch(self, method, params, responder):
+		try:
+			method = str(method)
+			if method.startswith('_'):
+				raise Exception('wrong method')
+			func = getattr(self.__syncer, method, None)
+			if func is None:
+				raise Exception('wrong method')
+			funcReplicated = func.func_dict.get('replicated', False)
+			if funcReplicated:
+				func(*params, callback=partial(self.onResponseCompleted, responder, method))
+				return
+			result = func(*params)
+			responder.set_result(result)
+		except Exception as e:
+			responder.set_error(str(e))
+
+	def onResponseCompleted(self, responder, method, result, failReason):
+		if failReason != FAIL_REASON.SUCCESS:
+			responder.set_error(str(failReason))
+			return
+
+		if method == 'executeWrite':
+			if result[0]:
+				responder.set_result(None)
+				return
+			else:
+				responder.set_error(str(result[1]))
+				return
+
+		responder.set_result(result)
 
 
 if __name__ == '__main__':
@@ -90,6 +157,7 @@ if __name__ == '__main__':
 	config.read(sys.argv[1])
 	syncer = DBSyncer(config)
 	httpHandler = HTTPJsonRpcHandler(syncer)
+	msgPackHandler = MsgPackRpcHanlder(syncer)
 
 	while not syncer._isReady():
 		time.sleep(1.0)
@@ -101,7 +169,8 @@ if __name__ == '__main__':
 		rpcAddress = config.get('DBSyncer', 'msgPackRpcAddr')
 		rpcHost, rpcPort = rpcAddress.split(':')
 		rpcPort = int(rpcPort)
-		rpcServer = msgpackrpc.Server(syncer)
+		rpcServer = msgpackrpc.Server(None)
+		rpcServer.dispatch = msgPackHandler.dispatch
 		rpcServer.listen(msgpackrpc.Address(rpcHost, rpcPort))
 
 	loop = tornado.ioloop.IOLoop.current()
